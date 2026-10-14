@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync --frozen
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+
+  test:
+    # Runs the same Compose stack and Make targets as local dev, on a clean machine.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: cp .env.example .env
+      - name: make up
+        run: make up
+      - name: Migrations upgrade, downgrade, upgrade
+        run: |
+          docker compose exec -T api alembic upgrade head
+          docker compose exec -T api alembic downgrade -1
+          docker compose exec -T api alembic upgrade head
+      - name: pytest
+        run: docker compose exec -T api pytest -v
+      - name: Health through nginx
+        run: curl -fsS -i http://localhost:8080/health
+      - name: Logs on failure
+        if: failure()
+        run: docker compose logs
