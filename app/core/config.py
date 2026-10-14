@@ -31,6 +31,9 @@ class Settings(BaseSettings):
     login_email_failure_limit: int = Field(default=5, gt=0)
     login_email_window_seconds: int = Field(default=900, gt=0)
 
+    # Prefix for lesson `hls_url`. Sprint 5 replaces it with signed stream URLs.
+    media_base_url: str = "http://localhost:8080/media"
+
 
 @lru_cache
 def get_settings() -> Settings:
