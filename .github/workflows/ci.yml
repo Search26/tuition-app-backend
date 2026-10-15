@@ -27,10 +27,22 @@ jobs:
           docker compose exec -T api alembic upgrade head
           docker compose exec -T api alembic downgrade -1
           docker compose exec -T api alembic upgrade head
+      - name: Models match migrations
+        run: docker compose exec -T api alembic check
       - name: pytest
         run: docker compose exec -T api pytest -v
       - name: Health through nginx
         run: curl -fsS -i http://localhost:8080/health
+      - name: Spoofed X-Forwarded-For can't dodge the login IP limit
+        run: |
+          # LOGIN_IP_LIMIT is 20 in .env.example, so the 21st attempt must be 429.
+          for i in $(seq 1 21); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' -X POST http://localhost:8080/auth/login \
+              -H 'Content-Type: application/json' -H "X-Forwarded-For: 10.0.0.$i" \
+              -d "{\"email\":\"nobody$i@example.com\",\"password\":\"wrong-password\"}")
+          done
+          echo "21st login attempt: $code"
+          test "$code" = 429
       - name: Logs on failure
         if: failure()
         run: docker compose logs
