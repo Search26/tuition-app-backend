@@ -1,0 +1,164 @@
+# Production stack for one VPS. Always run through the Makefile's prod-* targets (or
+# `docker compose --env-file .env.prod -f compose.prod.yml ...`), so ${...} below come from
+# .env.prod. Only Caddy is published to the internet; MinIO is on the VPS's loopback only, for
+# admin uploads over an SSH tunnel. Limits assume a 2 vCPU / 4 GB VPS.
+name: tuition
+
+x-service: &service
+  restart: unless-stopped
+  networks: [backend]
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "5"
+
+x-app: &app
+  <<: *service
+  build:
+    context: .
+    target: prod
+  image: tuition-app:prod
+  env_file: .env.prod
+  depends_on:
+    postgres:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+    minio:
+      condition: service_healthy
+
+services:
+  caddy:
+    <<: *service
+    image: caddy:2.8-alpine
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      DOMAIN: ${DOMAIN:?set DOMAIN in .env.prod}
+    volumes:
+      - ./docker/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      backend:
+        # Fixed, because nginx trusts X-Forwarded-For from this address only (prod-real-ip.conf).
+        ipv4_address: 172.30.0.10
+    depends_on:
+      - nginx
+    mem_limit: 128m
+
+  nginx:
+    <<: *service
+    image: nginx:1.27-alpine
+    volumes:
+      - ./docker/nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./docker/nginx/prod-real-ip.conf:/etc/nginx/conf.d/00-real-ip.conf:ro
+    depends_on:
+      api:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    mem_limit: 128m
+
+  api:
+    <<: *app
+    environment:
+      # Only nginx reaches this port, so trust its X-Forwarded-For for the client IP.
+      FORWARDED_ALLOW_IPS: "*"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
+    mem_limit: 512m
+
+  worker:
+    <<: *app
+    command: ["arq", "app.worker.WorkerSettings"]
+    # arq cancels a running transcode on SIGTERM and retries it later; give it time to clean up.
+    stop_grace_period: 30s
+    mem_limit: 1536m
+    cpus: 1.5
+
+  postgres:
+    <<: *service
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?}
+      POSTGRES_DB: ${POSTGRES_DB:?}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    mem_limit: 768m
+
+  redis:
+    <<: *service
+    image: redis:7-alpine
+    # AOF, so queued and deferred jobs (retries, delayed deletes) survive a restart.
+    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD:?}"]
+    environment:
+      REDISCLI_AUTH: ${REDIS_PASSWORD:?}
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    mem_limit: 256m
+
+  minio:
+    <<: *service
+    build: docker/minio
+    image: tuition-minio:RELEASE.2025-10-15T17-29-55Z
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:?}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:?}
+    ports:
+      - "127.0.0.1:9000:9000"
+    volumes:
+      - miniodata:/data
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:9000/minio/health/live"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    mem_limit: 512m
+
+  # Not a long-running service: scripts/backup.sh and restore.sh run it with `run --rm`.
+  rclone:
+    image: rclone/rclone:1.68
+    profiles: [tools]
+    networks: [backend]
+    environment:
+      RCLONE_CONFIG_MINIO_TYPE: s3
+      RCLONE_CONFIG_MINIO_PROVIDER: Minio
+      RCLONE_CONFIG_MINIO_ENDPOINT: http://minio:9000
+      RCLONE_CONFIG_MINIO_ACCESS_KEY_ID: ${MINIO_ACCESS_KEY:?}
+      RCLONE_CONFIG_MINIO_SECRET_ACCESS_KEY: ${MINIO_SECRET_KEY:?}
+    volumes:
+      - ${BACKUP_DIR:-/var/backups/tuition}:/backup
+      # Off-site remotes (BACKUP_REMOTE) are defined in this file; it may be empty.
+      - ${RCLONE_CONFIG_FILE:-./deploy/rclone.conf}:/config/rclone/rclone.conf
+
+networks:
+  backend:
+    ipam:
+      config:
+        - subnet: 172.30.0.0/24
+
+volumes:
+  caddy_data:
+  caddy_config:
+  pgdata:
+  redisdata:
+  miniodata:

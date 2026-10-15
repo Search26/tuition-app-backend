@@ -1,0 +1,18 @@
+# TLS for {$DOMAIN}: Let's Encrypt on a real domain, Caddy's own local CA for "localhost" (CI).
+# Everything goes to nginx, which keeps the rate limits and the /media/ signature check.
+# No access log here: nginx logs every request with its request id, and with the media signature
+# redacted, which Caddy's log would not do.
+{$DOMAIN} {
+	encode zstd gzip
+
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		-Server
+	}
+
+	reverse_proxy nginx:80 {
+		# Overwrites anything the client sent; nginx validates it again.
+		header_up X-Request-ID {http.request.uuid}
+	}
+}
