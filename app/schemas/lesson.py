@@ -3,9 +3,9 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator
 
-from app.core.config import get_settings
 from app.models import LessonStatus
 from app.schemas._text import Description, Title, reject_explicit_null
+from app.services import media_urls
 
 
 class LessonPublic(BaseModel):
@@ -18,19 +18,22 @@ class LessonPublic(BaseModel):
     duration_seconds: int | None
     status: LessonStatus
     hls_path: str | None = Field(exclude=True)
+    thumbnail_path: str | None = Field(exclude=True)
 
+    # Playback goes through GET /lessons/{id}/stream; only the thumbnail is signed here.
     @computed_field  # type: ignore[prop-decorator]
     @property
-    def hls_url(self) -> str | None:
-        if self.status != LessonStatus.READY or not self.hls_path:
+    def thumbnail_url(self) -> str | None:
+        if self.status != LessonStatus.READY or not self.thumbnail_path:
             return None
-        return f"{get_settings().media_base_url.rstrip('/')}/{self.hls_path.lstrip('/')}"
+        return media_urls.file_url(self.thumbnail_path)
 
 
 class AdminLesson(LessonPublic):
     course_id: uuid.UUID
-    # Admins see the raw storage key; the public schema hides it.
+    # Admins see the raw storage keys; the public schema hides them.
     hls_path: str | None
+    thumbnail_path: str | None
     created_at: datetime
     updated_at: datetime
 

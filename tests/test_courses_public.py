@@ -1,5 +1,6 @@
 import unicodedata
 import uuid
+from urllib.parse import urlsplit
 
 import pytest
 from httpx import AsyncClient
@@ -8,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_engine
 from app.models import LessonStatus
+from app.services import media_urls
 from tests.factories import make_course, make_lesson
 
 pytestmark = pytest.mark.usefixtures("db")
@@ -142,19 +144,33 @@ async def test_detail_sorts_lessons_by_position(client: AsyncClient, db: AsyncSe
     assert [lesson["position"] for lesson in response.json()["lessons"]] == [1, 2, 3]
 
 
-async def test_detail_shows_hls_url_only_when_ready(client: AsyncClient, db: AsyncSession) -> None:
+async def test_detail_signs_the_thumbnail_only_when_ready_and_never_exposes_keys(
+    client: AsyncClient, db: AsyncSession
+) -> None:
     course = await make_course(db)
-    await make_lesson(db, course, 1, status=LessonStatus.READY, hls_path="hls/c/l1/master.m3u8")
-    await make_lesson(db, course, 2, status=LessonStatus.PROCESSING, hls_path="hls/c/l2/x.m3u8")
+    run = f"hls/{course.id}/{uuid.uuid4()}/{uuid.uuid4()}/"
+    for position, status in ((1, LessonStatus.READY), (2, LessonStatus.PROCESSING)):
+        await make_lesson(
+            db,
+            course,
+            position,
+            status=status,
+            hls_path=run + "master.m3u8",
+            thumbnail_path=run + "thumbnail.jpg",
+        )
     await make_lesson(db, course, 3)
 
     lessons = (await client.get(f"/courses/{course.id}")).json()["lessons"]
 
-    assert lessons[0]["hls_url"] == "http://localhost:8080/media/hls/c/l1/master.m3u8"
-    assert lessons[1]["hls_url"] is None
-    assert lessons[2]["hls_url"] is None
+    thumbnail = lessons[0]["thumbnail_url"]
+    assert thumbnail.startswith("http://localhost:8080/media/f/")
+    assert media_urls.verify(urlsplit(thumbnail).path) == run + "thumbnail.jpg"
+    assert lessons[1]["thumbnail_url"] is None
+    assert lessons[2]["thumbnail_url"] is None
     assert [lesson["status"] for lesson in lessons] == ["ready", "processing", "draft"]
-    assert all("hls_path" not in lesson for lesson in lessons)
+    # Playback goes through /lessons/{id}/stream; raw keys and the old hls_url are gone.
+    for lesson in lessons:
+        assert {"hls_url", "hls_path", "thumbnail_path"}.isdisjoint(lesson)
 
 
 async def test_detail_query_count_does_not_grow_with_lessons(

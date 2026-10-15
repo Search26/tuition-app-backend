@@ -3,7 +3,18 @@
 from app.db.base import Base
 from app.models.course import Course, Lesson, LessonStatus
 from app.models.enrollment import Enrollment
+from app.models.media_asset import MediaAsset, MediaAssetStatus
 from app.models.refresh_token import RefreshToken
 from app.models.user import User
 
-__all__ = ["Base", "Course", "Enrollment", "Lesson", "LessonStatus", "RefreshToken", "User"]
+__all__ = [
+    "Base",
+    "Course",
+    "Enrollment",
+    "Lesson",
+    "LessonStatus",
+    "MediaAsset",
+    "MediaAssetStatus",
+    "RefreshToken",
+    "User",
+]
