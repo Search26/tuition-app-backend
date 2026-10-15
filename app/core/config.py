@@ -39,6 +39,12 @@ class Settings(BaseSettings):
     upload_max_bytes: int = Field(default=2 * 1024**3, gt=0)
     upload_url_ttl_seconds: int = Field(default=900, gt=0, le=7 * 24 * 3600)
 
+    worker_max_jobs: int = Field(default=1, ge=1)
+    transcode_timeout_seconds: int = Field(default=3600, gt=0)
+    transcode_threads: int = Field(default=0, ge=0)  # 0 lets ffmpeg decide
+    transcode_tmp_dir: str = "/tmp"
+    transcode_retry_delay_seconds: int = Field(default=30, ge=0)
+
     # Prefix for lesson `hls_url`. Sprint 5 replaces it with signed stream URLs.
     media_base_url: str = "http://localhost:8080/media"
 

@@ -29,6 +29,7 @@ which takes a few minutes. Later runs use the cached image.
 | `make admin EMAIL=...` | Make a registered user an admin |
 | `make upload LESSON=... FILE=...` | Upload a source video to a lesson (runs on the host) |
 | `make logs` | Follow API logs |
+| `make worker-logs` | Follow transcode worker logs |
 
 ## Layout
 
@@ -90,3 +91,28 @@ for `MINIO_PUBLIC_ENDPOINT` (`localhost:9000` in dev), so the CLI runs on the ho
 make admin EMAIL=you@example.com
 ADMIN_EMAIL=you@example.com make upload LESSON=<lesson uuid> FILE=sample.mp4
 ```
+
+## Transcoding
+
+A completed upload queues one `transcode` job (arq on Redis) for the `worker` service, which runs
+`arq app.worker.WorkerSettings` from the same image as the API and shells out to ffmpeg.
+
+- One ffmpeg run makes H.264/AAC HLS (fMP4 segments, 6 s, keyframe-aligned) at 480p, 720p and
+  1080p on the video's short side, never upscaled; portrait videos stay portrait. Smaller sources
+  get one rendition at their own size. A thumbnail comes from 10% in (at most 5 s).
+- Output goes to `hls/{course_id}/{lesson_id}/{run_id}/` (`master.m3u8`, `v0/`, `v1/`, …,
+  `thumbnail.jpg`). Only the finishing transaction points the lesson at it (`hls_path`,
+  `thumbnail_path`, `duration_seconds`, status `ready`); then the previous video's prefix and
+  original are deleted. A lesson with a live video keeps playing it while a new one encodes.
+- Asset status: `uploaded → processing → ready | failed`. An ffmpeg or storage error is retried
+  once after `TRANSCODE_RETRY_DELAY_SECONDS`; a file ffprobe can't read fails at once. `error_msg`
+  holds the reason and the full ffmpeg log is kept at `logs/transcode/{asset_id}/{attempt}.log`.
+  A lesson with no live video goes `processing`, then back to `draft` on failure.
+- `GET /admin/lessons/{id}/assets` lists a lesson's assets, newest first.
+- `POST /admin/assets/{id}/retranscode` → 202, re-queues a `ready` or `failed` asset. 409
+  `ASSET_PROCESSING` while it runs, 409 `UPLOAD_NOT_COMPLETE` for a `pending` one, 503
+  `QUEUE_UNAVAILABLE` if Redis is down.
+
+Settings: `WORKER_MAX_JOBS` (1), `TRANSCODE_TIMEOUT_SECONDS` (3600), `TRANSCODE_THREADS` (0 lets
+ffmpeg decide), `TRANSCODE_TMP_DIR`, `TRANSCODE_RETRY_DELAY_SECONDS` (30). Tests use Redis
+database 1 (`TEST_REDIS_URL`) so the running worker never takes their jobs.

@@ -1,5 +1,6 @@
 """Presigned video upload: issue a PUT URL, then verify what landed in MinIO."""
 
+import logging
 import uuid
 from datetime import UTC, datetime, timedelta
 
@@ -7,13 +8,15 @@ from fastapi import status
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.clients import storage
+from app.clients import queue, storage
 from app.core.config import get_settings
 from app.core.errors import AppError, ConflictError, NotFoundError
 from app.models import Lesson, MediaAsset, MediaAssetStatus
 from app.schemas.media import UploadTicket
 from app.services.lessons import lesson_not_found
 from app.services.media_keys import VIDEO_EXTENSIONS, original_key
+
+logger = logging.getLogger(__name__)
 
 # Statuses a newer completed upload replaces. Sprint 4 owns processing and ready assets.
 _SUPERSEDABLE = (MediaAssetStatus.PENDING, MediaAssetStatus.UPLOADED, MediaAssetStatus.FAILED)
@@ -125,4 +128,9 @@ async def complete_upload(
     await session.commit()
     await session.refresh(asset)
     await storage.delete_keys_best_effort(superseded)
+    try:
+        await queue.enqueue_transcode(asset.id)
+    except Exception:
+        # The upload itself succeeded; the asset stays `uploaded` and retranscode enqueues it.
+        logger.exception("Could not enqueue transcode for asset %s", asset.id)
     return asset

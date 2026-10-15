@@ -17,9 +17,15 @@ os.environ["DATABASE_URL"] = _test_db_url
 os.environ["MINIO_BUCKET"] = "tuition-media-test"
 os.environ["MINIO_PUBLIC_ENDPOINT"] = os.environ.get("MINIO_ENDPOINT", "minio:9000")
 os.environ["MINIO_PUBLIC_SECURE"] = os.environ.get("MINIO_SECURE", "false")
+# Tests get their own Redis database: the Compose worker watches the dev queue and would otherwise
+# pick up (and consume) the transcode jobs tests enqueue.
+os.environ["REDIS_URL"] = os.environ.get(
+    "TEST_REDIS_URL", os.environ.get("REDIS_URL", "redis://redis:6379/0").rsplit("/", 1)[0] + "/1"
+)
 
 from alembic import command  # noqa: E402
 from app.clients.redis import get_redis  # noqa: E402
+from app.clients.storage import ensure_bucket, get_minio  # noqa: E402
 from app.core.config import get_settings  # noqa: E402
 from app.db.session import get_sessionmaker  # noqa: E402
 from app.main import create_app  # noqa: E402
@@ -61,6 +67,18 @@ async def db(migrated_db: None) -> AsyncIterator[AsyncSession]:
         )
         await session.commit()
         redis = get_redis()
-        async for key in redis.scan_iter("ratelimit:login:*"):
-            await redis.delete(key)
+        for pattern in ("ratelimit:login:*", "arq:*"):
+            async for key in redis.scan_iter(pattern):
+                await redis.delete(key)
         yield session
+
+
+@pytest.fixture
+async def bucket() -> str:
+    """The test bucket, emptied before each test."""
+    await ensure_bucket()
+    name = get_settings().minio_bucket
+    client = get_minio()
+    for obj in client.list_objects(name, recursive=True):
+        client.remove_object(name, obj.object_name)
+    return name

@@ -1,4 +1,4 @@
-.PHONY: up down clean migrate test lint fmt seed admin upload logs
+.PHONY: up down clean migrate test lint fmt seed admin upload logs worker-logs
 
 COMPOSE := docker compose
 RUN_API := $(COMPOSE) exec -T api
@@ -40,3 +40,6 @@ upload:
 
 logs:
 	$(COMPOSE) logs -f api
+
+worker-logs:
+	$(COMPOSE) logs -f worker

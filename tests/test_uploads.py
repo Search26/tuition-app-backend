@@ -9,7 +9,9 @@ from minio.error import S3Error
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.clients.storage import ensure_bucket, get_minio
+from app.clients import queue
+from app.clients.redis import get_redis
+from app.clients.storage import get_minio
 from app.core.config import get_settings
 from app.models import Course, Lesson, MediaAsset, MediaAssetStatus
 from tests.factories import auth_headers, make_course, make_lesson, make_user
@@ -17,17 +19,6 @@ from tests.factories import auth_headers, make_course, make_lesson, make_user
 pytestmark = pytest.mark.usefixtures("db", "bucket")
 
 VIDEO = b"\x00\x00\x00\x18ftypmp42" + b"\x00" * 2048
-
-
-@pytest.fixture
-async def bucket() -> str:
-    """The test bucket, emptied before each test."""
-    await ensure_bucket()
-    name = get_settings().minio_bucket
-    client = get_minio()
-    for obj in client.list_objects(name, recursive=True):
-        client.remove_object(name, obj.object_name)
-    return name
 
 
 @pytest.fixture
@@ -205,9 +196,14 @@ async def test_complete_rejects_a_different_stored_content_type(
 
 
 async def test_complete_rejects_a_file_larger_than_the_limit(
-    client: AsyncClient, db: AsyncSession, admin: dict[str, str], lesson: Lesson, bucket: str
+    client: AsyncClient,
+    db: AsyncSession,
+    admin: dict[str, str],
+    lesson: Lesson,
+    bucket: str,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    get_settings().upload_max_bytes = 1024
+    monkeypatch.setattr(get_settings(), "upload_max_bytes", 1024)
     ticket = (await _request(client, lesson.id, admin, size=100)).json()
     assert await _put(ticket, body=VIDEO) == 200  # declared 100 bytes, sent 2 KB
 
@@ -318,9 +314,9 @@ async def test_bucket_is_private(
 
 
 async def test_put_after_the_url_expires_is_refused(
-    client: AsyncClient, admin: dict[str, str], lesson: Lesson
+    client: AsyncClient, admin: dict[str, str], lesson: Lesson, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    get_settings().upload_url_ttl_seconds = 1
+    monkeypatch.setattr(get_settings(), "upload_url_ttl_seconds", 1)
     ticket = (await _request(client, lesson.id, admin)).json()
     await asyncio.sleep(2)
 
@@ -341,3 +337,32 @@ async def test_upload_routes_need_an_admin(
         anonymous = await client.post(path, json=body)
         non_admin = await client.post(path, json=body, headers=user)
         assert (anonymous.status_code, non_admin.status_code) == (401, 403)
+
+
+async def test_complete_enqueues_one_transcode_job(
+    client: AsyncClient, admin: dict[str, str], lesson: Lesson
+) -> None:
+    ticket = (await _request(client, lesson.id, admin)).json()
+    assert await _put(ticket) == 200
+
+    for _ in range(2):
+        assert (await _complete(client, lesson.id, ticket["asset_id"], admin)).status_code == 200
+
+    redis = get_redis()
+    assert await redis.zrange("arq:queue", 0, -1) == [f"transcode:{ticket['asset_id']}".encode()]
+
+
+async def test_complete_still_succeeds_when_the_queue_is_down(
+    client: AsyncClient, admin: dict[str, str], lesson: Lesson, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def broken(_: uuid.UUID) -> None:
+        raise ConnectionError("redis down")
+
+    monkeypatch.setattr(queue, "enqueue_transcode", broken)
+    ticket = (await _request(client, lesson.id, admin)).json()
+    assert await _put(ticket) == 200
+
+    response = await _complete(client, lesson.id, ticket["asset_id"], admin)
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "uploaded"

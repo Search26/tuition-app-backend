@@ -11,7 +11,7 @@ from app.clients import storage
 from app.core.errors import NotFoundError
 from app.models import Course, Lesson
 from app.services.courses import course_not_found
-from app.services.media_keys import lesson_prefix
+from app.services.media_keys import hls_lesson_prefix, lesson_prefix
 
 
 def lesson_not_found() -> NotFoundError:
@@ -57,7 +57,11 @@ async def update_lesson(
 
 async def delete_lesson(session: AsyncSession, lesson_id: uuid.UUID) -> None:
     lesson = await _get_lesson(session, lesson_id)
-    prefix = lesson_prefix(lesson.course_id, lesson.id)
+    prefixes = [
+        lesson_prefix(lesson.course_id, lesson.id),
+        hls_lesson_prefix(lesson.course_id, lesson.id),
+    ]
     await session.delete(lesson)
     await session.commit()
-    await storage.delete_prefix_best_effort(prefix)
+    for prefix in prefixes:
+        await storage.delete_prefix_best_effort(prefix)
