@@ -27,6 +27,7 @@ which takes a few minutes. Later runs use the cached image.
 | `make lint` / `make fmt` | ruff check and format |
 | `make seed` | Load 2 sample courses with 9 lessons (safe to re-run) |
 | `make admin EMAIL=...` | Make a registered user an admin |
+| `make upload LESSON=... FILE=...` | Upload a source video to a lesson (runs on the host) |
 | `make logs` | Follow API logs |
 
 ## Layout
@@ -67,3 +68,25 @@ Access tokens last 15 minutes, refresh tokens 30 days. Protected routes depend o
 Admin routes live under `/admin` and all require `require_admin`: course CRUD at
 `/admin/courses`, lesson create at `/admin/courses/{id}/lessons`, lesson update and delete at
 `/admin/lessons/{id}`. A course with enrollments can't be deleted; unpublish it instead.
+
+## Video upload
+
+Source videos go straight from the uploader to a private MinIO bucket; the API only signs the
+URL and checks the result. All three calls need an admin token.
+
+1. `POST /admin/lessons/{id}/upload-request` `{content_type, size_bytes}` → 201
+   `{asset_id, upload_url, method, headers, expires_at}`. Only `video/mp4` and
+   `video/quicktime` up to `UPLOAD_MAX_BYTES` (2 GB); the URL lasts 15 minutes.
+2. `PUT upload_url` with the file and exactly the returned `headers`.
+3. `POST /admin/lessons/{id}/upload-complete` `{asset_id}` → 200 the media asset, status
+   `uploaded`. 409 `UPLOAD_NOT_FOUND` if the file isn't there yet; a file that is too large or
+   has a different Content-Type is deleted and the asset marked `failed` (422).
+
+Keys are built by the server: `original/{course_id}/{lesson_id}/{asset_id}.mp4|mov`. A completed
+upload replaces the lesson's earlier pending, uploaded or failed assets. Presigned URLs are signed
+for `MINIO_PUBLIC_ENDPOINT` (`localhost:9000` in dev), so the CLI runs on the host:
+
+```bash
+make admin EMAIL=you@example.com
+ADMIN_EMAIL=you@example.com make upload LESSON=<lesson uuid> FILE=sample.mp4
+```

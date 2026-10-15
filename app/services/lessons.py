@@ -7,19 +7,21 @@ from typing import Any
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.clients import storage
 from app.core.errors import NotFoundError
 from app.models import Course, Lesson
 from app.services.courses import course_not_found
+from app.services.media_keys import lesson_prefix
 
 
-def _lesson_not_found() -> NotFoundError:
+def lesson_not_found() -> NotFoundError:
     return NotFoundError("LESSON_NOT_FOUND", "Lesson not found")
 
 
 async def _get_lesson(session: AsyncSession, lesson_id: uuid.UUID) -> Lesson:
     lesson = await session.get(Lesson, lesson_id)
     if lesson is None:
-        raise _lesson_not_found()
+        raise lesson_not_found()
     return lesson
 
 
@@ -55,5 +57,7 @@ async def update_lesson(
 
 async def delete_lesson(session: AsyncSession, lesson_id: uuid.UUID) -> None:
     lesson = await _get_lesson(session, lesson_id)
+    prefix = lesson_prefix(lesson.course_id, lesson.id)
     await session.delete(lesson)
     await session.commit()
+    await storage.delete_prefix_best_effort(prefix)
