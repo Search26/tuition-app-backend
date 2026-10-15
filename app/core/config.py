@@ -8,9 +8,14 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     """App settings read from the environment and `.env`. Secrets have no defaults."""
 
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+    # hide_input_in_errors: a startup error must never print the values it was given (secrets).
+    model_config = SettingsConfigDict(
+        env_file=".env", env_file_encoding="utf-8", extra="ignore", hide_input_in_errors=True
+    )
 
     app_env: Literal["dev", "test", "prod"] = "dev"
+    log_format: Literal["text", "json"] = "text"
+    log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
 
     database_url: SecretStr
     redis_url: SecretStr
@@ -66,6 +71,31 @@ class Settings(BaseSettings):
     def _media_secret_is_its_own(self) -> "Settings":
         if self.media_signing_secret.get_secret_value() == self.jwt_secret.get_secret_value():
             raise ValueError("MEDIA_SIGNING_SECRET must differ from JWT_SECRET")
+        return self
+
+    @model_validator(mode="after")
+    def _production_is_locked_down(self) -> "Settings":
+        """In prod, refuse the placeholders from .env.example. Errors name the variable only."""
+        if self.app_env != "prod":
+            return self
+        problems = [
+            f"{name.upper()} still has a change-me placeholder"
+            for name in (
+                "database_url",
+                "redis_url",
+                "minio_access_key",
+                "minio_secret_key",
+                "jwt_secret",
+                "media_signing_secret",
+            )
+            if "change-me" in getattr(self, name).get_secret_value().lower()
+        ]
+        if not self.media_base_url.startswith("https://"):
+            problems.append("MEDIA_BASE_URL must start with https:// in prod")
+        if any("localhost" in o or "127.0.0.1" in o for o in self.cors_origin_list):
+            problems.append("CORS_ORIGINS must not list localhost in prod")
+        if problems:
+            raise ValueError("; ".join(problems))
         return self
 
 

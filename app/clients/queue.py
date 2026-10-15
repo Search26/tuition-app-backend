@@ -7,6 +7,7 @@ from arq import ArqRedis, create_pool
 from arq.connections import RedisSettings
 
 from app.core.config import get_settings
+from app.core.logging import request_id_var
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +39,12 @@ def transcode_job_id(asset_id: uuid.UUID) -> str:
 async def enqueue_transcode(asset_id: uuid.UUID) -> None:
     """Enqueue once per asset: arq ignores a job id that is already queued or running."""
     queue = await get_queue()
-    await queue.enqueue_job("transcode", str(asset_id), _job_id=transcode_job_id(asset_id))
+    await queue.enqueue_job(
+        "transcode",
+        str(asset_id),
+        request_id=request_id_var.get(),
+        _job_id=transcode_job_id(asset_id),
+    )
 
 
 async def enqueue_delete_prefix(prefix: str, delay_seconds: int) -> None:

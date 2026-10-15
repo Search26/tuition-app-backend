@@ -10,6 +10,7 @@ import logging
 import re
 import shutil
 import tempfile
+import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -21,6 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.clients import queue, storage
 from app.core.config import get_settings
+from app.core.logging import request_id_var
 from app.db.session import get_sessionmaker
 from app.models import Lesson, LessonStatus, MediaAsset, MediaAssetStatus
 from app.services.media_keys import hls_run_prefix, prefix_of, transcode_log_key
@@ -203,7 +205,22 @@ def _make_workdir(root: str, asset_id: str) -> Path:
     return Path(tempfile.mkdtemp(prefix=f"transcode-{asset_id}-", dir=root))
 
 
-async def transcode(ctx: dict[str, Any], asset_id: str) -> str:
+async def transcode(ctx: dict[str, Any], asset_id: str, request_id: str | None = None) -> str:
+    """arq job. `request_id` is the id of the request that enqueued it, for the log lines."""
+    request_id_var.set(request_id)  # each arq job runs in its own task, so this doesn't leak
+    job = {"asset_id": asset_id, "job_try": ctx.get("job_try", 1)}
+    started = time.monotonic()
+    logger.info("Transcode started", extra=job)
+    result = await _transcode(ctx, asset_id)
+    logger.info(
+        "Transcode %s",
+        result,
+        extra={**job, "result": result, "duration_s": round(time.monotonic() - started, 1)},
+    )
+    return result
+
+
+async def _transcode(ctx: dict[str, Any], asset_id: str) -> str:
     settings = get_settings()
     run = await _start(uuid.UUID(asset_id))
     if run is None:

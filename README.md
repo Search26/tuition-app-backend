@@ -169,3 +169,28 @@ curl -X PUT localhost:8080/me/progress -H "Authorization: Bearer $TOKEN" \
   -H 'Content-Type: application/json' \
   -d '{"items":[{"lesson_id":"<id>","position_seconds":42.5,"client_updated_at":"2026-10-15T10:00:00+07:00"}]}'
 ```
+
+## Logs, request ids and rate limits
+
+Every response carries `X-Request-ID`. It comes from the proxy in front (Caddy in production,
+nginx in dev) when that sends a safe one, otherwise the API makes one. Every log line written
+while handling the request carries the same id, and so do the worker's lines for a transcode the
+request enqueued.
+
+`LOG_FORMAT=json` writes one JSON object per line (`ts`, `level`, `logger`, `msg`,
+`request_id`, plus fields such as `status`, `duration_ms`, `asset_id`); `text` (the dev default)
+is the same with a readable layout. The API writes one `app.access` line per request; `/health`
+and the per-file `/internal/media-auth` checks log at DEBUG only. Passwords, tokens and presigned
+URLs are never logged, and settings errors never echo their input.
+
+nginx logs JSON to stdout with the media signature replaced by `-`, and limits each client IP:
+
+| Paths | Rate | Burst |
+| --- | --- | --- |
+| `/auth/` | 5 req/s | 10 |
+| other API paths | 20 req/s | 60 |
+| `/media/` | 50 req/s | 200 |
+
+Over the limit is `429` with `Retry-After: 1` and `{"error":{"code":"RATE_LIMITED",...}}`.
+`/health` is never limited. With `APP_ENV=prod` the API refuses to start while any secret still
+contains `change-me`, `MEDIA_BASE_URL` isn't `https://`, or `CORS_ORIGINS` lists localhost.
