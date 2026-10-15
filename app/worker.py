@@ -8,7 +8,7 @@ from arq import func
 from app.clients.queue import redis_settings
 from app.core.config import get_settings
 from app.db.session import get_engine
-from app.services.transcode_job import MAX_TRIES, transcode
+from app.services.transcode_job import MAX_TRIES, delete_prefix, transcode
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 
@@ -36,7 +36,9 @@ class WorkerSettings:
             # Backstop only: ffmpeg has its own per-attempt timeout; this also covers download,
             # thumbnail and upload.
             timeout=_settings.transcode_timeout_seconds + 900,
-        )
+        ),
+        # Replaced videos, deferred until their signed URLs have expired.
+        func(delete_prefix, name="delete_prefix", max_tries=3, timeout=600),
     ]
     redis_settings = redis_settings()
     max_jobs = _settings.worker_max_jobs

@@ -39,3 +39,10 @@ async def enqueue_transcode(asset_id: uuid.UUID) -> None:
     """Enqueue once per asset: arq ignores a job id that is already queued or running."""
     queue = await get_queue()
     await queue.enqueue_job("transcode", str(asset_id), _job_id=transcode_job_id(asset_id))
+
+
+async def enqueue_delete_prefix(prefix: str, delay_seconds: int) -> None:
+    queue = await get_queue()
+    await queue.enqueue_job(
+        "delete_prefix", prefix, _job_id=f"delete:{prefix}", _defer_by=delay_seconds
+    )

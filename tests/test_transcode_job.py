@@ -7,9 +7,12 @@ from pathlib import Path
 
 import pytest
 from arq import Retry
+from arq.jobs import Job
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.clients import queue
+from app.clients.redis import get_redis
 from app.clients.storage import get_minio
 from app.core.config import get_settings
 from app.models import Lesson, LessonStatus, MediaAsset, MediaAssetStatus
@@ -215,9 +218,48 @@ async def test_a_new_video_replaces_the_live_one_only_when_ready(
     assert prefix_of(lesson.hls_path) != old_prefix
     ids = set(await db.scalars(select(MediaAsset.id).where(MediaAsset.lesson_id == lesson.id)))
     assert ids == {second.id}
-    assert _objects(old_prefix) == []
     assert _objects(old_original) == []
     assert _objects(started.prefix) == []  # the interrupted attempt's prefix was cleaned too
+    # The replaced video stays until every signed URL to it has expired, then a job deletes it.
+    assert _objects(old_prefix) != []
+    job = await Job(f"delete:{old_prefix}", get_redis()).info()
+    assert job is not None and job.function == "delete_prefix" and job.args == (old_prefix,)
+    ttl_ms = get_settings().media_url_ttl_seconds * 1000
+    assert abs(job.score - job.enqueue_time.timestamp() * 1000 - ttl_ms) < 5000
+    assert await transcode_job.delete_prefix({}, old_prefix) == "deleted"
+    assert _objects(old_prefix) == []
+
+
+async def test_delete_prefix_never_touches_a_live_video_or_other_keys(
+    db: AsyncSession, lesson: Lesson, clips: dict[str, Path]
+) -> None:
+    asset = await _asset(db, lesson, clips["audio"])
+    await transcode_job.transcode({"job_try": 1}, str(asset.id))
+    await _reload(db, lesson)
+    live = prefix_of(lesson.hls_path)
+
+    assert await transcode_job.delete_prefix({}, live) == "live"
+    for bad in ("hls/", "original/", f"{live}..", live.rstrip("/")):
+        assert await transcode_job.delete_prefix({}, bad) == "refused"
+    assert _objects(live) != []
+
+
+async def test_a_replaced_video_is_deleted_at_once_if_the_queue_is_down(
+    db: AsyncSession, lesson: Lesson, clips: dict[str, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    first = await _asset(db, lesson, clips["audio"])
+    await transcode_job.transcode({"job_try": 1}, str(first.id))
+    await _reload(db, lesson, first)
+    old_prefix = first.output_prefix
+
+    async def down(*_: object) -> None:
+        raise ConnectionError("redis down")
+
+    monkeypatch.setattr(queue, "enqueue_delete_prefix", down)
+    second = await _asset(db, lesson, clips["silent"])
+    assert await transcode_job.transcode({"job_try": 1}, str(second.id)) == "ready"
+
+    assert _objects(old_prefix) == []
 
 
 async def test_an_older_job_finishing_late_is_discarded(

@@ -60,6 +60,47 @@ jobs:
           test "$STATUS" = ready
           docker compose exec -T postgres psql -U tuition -c \
             "select status, duration_seconds, hls_path from lessons where id = '$LESSON'"
+      - name: Signed HLS through nginx
+        run: |
+          set -eu
+          code() { curl -s -o /dev/null -w '%{http_code}' "$@"; }
+          expect() { got=$(code "${@:3}"); echo "$1: $got"; test "$got" = "$2"; }
+          LESSON=$(docker compose exec -T postgres psql -U tuition -Atc \
+            "select id from lessons where status = 'ready' limit 1")
+          COURSE=$(docker compose exec -T postgres psql -U tuition -Atc \
+            "select course_id from lessons where id = '$LESSON'")
+          curl -fsS -X POST http://localhost:8080/auth/register -H 'Content-Type: application/json' \
+            -d '{"email":"ci-student@example.com","password":"correct-horse-battery","name":"S"}'
+          TOKEN=$(curl -fsS -X POST http://localhost:8080/auth/login -H 'Content-Type: application/json' \
+            -d '{"email":"ci-student@example.com","password":"correct-horse-battery"}' | jq -r .access_token)
+          AUTH="Authorization: Bearer $TOKEN"
+          expect "stream before enrolling" 403 -H "$AUTH" http://localhost:8080/lessons/$LESSON/stream
+          curl -fsS -X POST -H "$AUTH" http://localhost:8080/courses/$COURSE/enroll
+          URL=$(curl -fsS -H "$AUTH" http://localhost:8080/lessons/$LESSON/stream | jq -r .url)
+          echo "$URL"
+          P=${URL%master.m3u8}
+          # Play every rendition through nginx from inside the network: each child URL must
+          # inherit the token, so this fails if any playlist, init file or segment is refused.
+          docker compose exec -T api ffmpeg -v error -i "${URL/localhost:8080/nginx}" -map 0 -f null -
+          expect "master" 200 "$URL"
+          expect "variant playlist" 200 "${P}v0/index.m3u8"
+          expect "init" 200 "${P}v0/init_0.mp4"
+          expect "segment" 200 "${P}v0/seg_00000.m4s"
+          expect "range" 206 -H 'Range: bytes=0-99' "${P}v0/seg_00000.m4s"
+          SIG=$(echo "$URL" | cut -d/ -f7); EXP=$(echo "$URL" | cut -d/ -f6); KEY=$(echo "$URL" | cut -d/ -f8-)
+          OTHER=$(echo "$KEY" | sed -E 's#^(hls/[^/]+/)[^/]+#\100000000-0000-0000-0000-000000000000#')
+          EXPIRED=$(docker compose exec -T api python -c \
+            "from app.services.media_urls import video_url; print(video_url('$KEY', now=0)[0])")
+          BAD=$([ "${SIG:0:1}" = A ] && echo "B${SIG:1}" || echo "A${SIG:1}")
+          expect "tampered sig" 403 "http://localhost:8080/media/v/$EXP/$BAD/$KEY"
+          expect "later exp" 403 "http://localhost:8080/media/v/$((EXP + 3600))/$SIG/$KEY"
+          expect "expired" 403 "$EXPIRED"
+          expect "other lesson" 403 "http://localhost:8080/media/v/$EXP/$SIG/$OTHER"
+          expect "no token" 403 "http://localhost:8080/media/$KEY"
+          expect "missing file" 404 "${P}v0/seg_99999.m4s"
+          expect "POST" 403 -X POST "$URL"
+          expect "internal from outside" 404 http://localhost:8080/internal/media-auth
+          expect "MinIO direct" 403 "http://localhost:9000/tuition-media/$KEY"
       - name: Spoofed X-Forwarded-For can't dodge the login IP limit
         run: |
           # LOGIN_IP_LIMIT is 20 in .env.example, so the 21st attempt must be 429.

@@ -1,0 +1,56 @@
+<!doctype html>
+<!--
+  Dev-only page to play a lesson the way a browser client would.
+  Serve it from the CORS origin in .env: python -m http.server 3000 -d scripts
+  then open http://localhost:3000/dev-player.html
+-->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Dev player</title>
+  <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.17/dist/hls.min.js"></script>
+  <style>
+    body { font: 15px system-ui, sans-serif; max-width: 860px; margin: 24px auto; padding: 0 16px; }
+    input { width: 100%; box-sizing: border-box; margin: 4px 0 12px; padding: 6px; font: inherit; }
+    video { width: 100%; background: #000; }
+    pre { white-space: pre-wrap; word-break: break-all; background: #f4f4f4; padding: 8px; }
+  </style>
+</head>
+<body>
+  <h1>Dev player</h1>
+  <label>API <input id="api" value="http://localhost:8080"></label>
+  <label>Access token (POST /auth/login) <input id="token"></label>
+  <label>Lesson id <input id="lesson"></label>
+  <button id="play">Get stream and play</button>
+  <pre id="log"></pre>
+  <video id="video" controls playsinline></video>
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const log = (line) => { $("log").textContent += line + "\n"; };
+    $("play").onclick = async () => {
+      $("log").textContent = "";
+      const res = await fetch(`${$("api").value}/lessons/${$("lesson").value}/stream`, {
+        headers: { Authorization: `Bearer ${$("token").value.trim()}` },
+      });
+      const body = await res.json();
+      log(`GET /stream -> ${res.status}`);
+      if (!res.ok) { log(JSON.stringify(body)); return; }
+      log(`url: ${body.url}\nexpires_at: ${body.expires_at}`);
+      const video = $("video");
+      if (video.canPlayType("application/vnd.apple.mpegurl")) {
+        log("native HLS (Safari)");
+        video.src = body.url;
+      } else if (Hls.isSupported()) {
+        log(`hls.js ${Hls.version}`);
+        const hls = new Hls();
+        hls.on(Hls.Events.LEVEL_SWITCHED, (_, d) => log(`rendition: ${hls.levels[d.level].height}p`));
+        hls.on(Hls.Events.ERROR, (_, d) => log(`error: ${d.type} ${d.details} ${d.response?.code ?? ""}`));
+        hls.loadSource(body.url);
+        hls.attachMedia(video);
+      }
+      video.play().catch(() => log("press play"));
+    };
+  </script>
+</body>
+</html>

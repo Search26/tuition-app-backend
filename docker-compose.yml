@@ -42,6 +42,7 @@ services:
       - ./docker/nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
     depends_on:
       - api
+      - minio  # /media/ proxies to it; nginx resolves upstreams at startup
 
   postgres:
     image: postgres:16-alpine
