@@ -7,12 +7,12 @@ from arq import func
 
 from app.clients.queue import redis_settings
 from app.core.config import get_settings
+from app.core.logging import configure_logging
 from app.db.session import get_engine
 from app.services.transcode_job import MAX_TRIES, delete_prefix, transcode
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
-
 _settings = get_settings()
+configure_logging(_settings.log_format, _settings.log_level)
 
 
 async def startup(_: dict[str, Any]) -> None:

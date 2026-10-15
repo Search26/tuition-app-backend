@@ -5,6 +5,8 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from app.core.logging import request_id_var
+from app.core.request_id import HEADER, request_id_of
 from app.schemas.error import ErrorBody, ErrorDetail, ErrorResponse
 
 logger = logging.getLogger(__name__)
@@ -103,9 +105,19 @@ async def _validation_error_handler(_: Request, exc: Exception) -> JSONResponse:
 
 
 async def _unhandled_error_handler(request: Request, exc: Exception) -> JSONResponse:
-    logger.exception("Unhandled error on %s %s", request.method, request.url.path, exc_info=exc)
+    # This runs outside the request-id middleware (Starlette's outermost layer), so restore the id
+    # for the log line and the response from the request's state.
+    request_id = request_id_of(request.scope)
+    token = request_id_var.set(request_id)
+    try:
+        logger.exception("Unhandled error on %s %s", request.method, request.url.path, exc_info=exc)
+    finally:
+        request_id_var.reset(token)
     return error_response(
-        status.HTTP_500_INTERNAL_SERVER_ERROR, "INTERNAL_ERROR", "Internal server error"
+        status.HTTP_500_INTERNAL_SERVER_ERROR,
+        "INTERNAL_ERROR",
+        "Internal server error",
+        headers={HEADER: request_id} if request_id else None,
     )
 
 

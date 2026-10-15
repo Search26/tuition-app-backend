@@ -101,16 +101,42 @@ jobs:
           expect "POST" 403 -X POST "$URL"
           expect "internal from outside" 404 http://localhost:8080/internal/media-auth
           expect "MinIO direct" 403 "http://localhost:9000/tuition-media/$KEY"
+          # The signature is a working credential until exp: nginx logs it as "-".
+          docker compose logs nginx | grep -E '"uri":"/media/v/[0-9]+/-/hls/' | tail -1
+          ! docker compose logs nginx | grep -F "$SIG"
       - name: Spoofed X-Forwarded-For can't dodge the login IP limit
         run: |
-          # LOGIN_IP_LIMIT is 20 in .env.example, so the 21st attempt must be 429.
+          # LOGIN_IP_LIMIT is 20 in .env.example, so the 21st attempt must be 429 from the API.
+          # Paced under nginx's 5 r/s /auth/ limit, so this tests the API's own limit.
           for i in $(seq 1 21); do
-            code=$(curl -s -o /dev/null -w '%{http_code}' -X POST http://localhost:8080/auth/login \
+            code=$(curl -s -o /tmp/login.json -w '%{http_code}' -X POST http://localhost:8080/auth/login \
               -H 'Content-Type: application/json' -H "X-Forwarded-For: 10.0.0.$i" \
               -d "{\"email\":\"nobody$i@example.com\",\"password\":\"wrong-password\"}")
+            sleep 0.3
           done
-          echo "21st login attempt: $code"
+          echo "21st login attempt: $code $(cat /tmp/login.json)"
           test "$code" = 429
+          grep -q "Too many attempts" /tmp/login.json
+      - name: nginx rate limits and request id
+        run: |
+          set -eu
+          # /auth/ is 5 r/s with a burst of 10: a back-to-back flood must hit nginx's 429.
+          for i in $(seq 1 30); do
+            curl -s -o /dev/null -w '%{http_code}\n' http://localhost:8080/auth/refresh \
+              -X POST -H 'Content-Type: application/json' -d '{"refresh_token":"x"}'
+          done | sort | uniq -c | tee /tmp/codes
+          grep -q ' 429$' /tmp/codes
+          curl -s -i -X POST http://localhost:8080/auth/refresh -H 'Content-Type: application/json' \
+            -d '{"refresh_token":"x"}' | tee /tmp/limited
+          grep -q '^HTTP/1.1 429' /tmp/limited
+          grep -qi '^Retry-After: 1' /tmp/limited
+          grep -q '"code":"RATE_LIMITED"' /tmp/limited
+          # /health is never limited.
+          for i in $(seq 1 100); do curl -fsS -o /dev/null http://localhost:8080/health; done
+          # A request id from upstream is kept and echoed; one is made when missing.
+          curl -fsS -D - -o /dev/null -H 'X-Request-ID: ci-check-1' http://localhost:8080/courses \
+            | grep -i '^x-request-id: ci-check-1'
+          curl -fsS -D - -o /dev/null http://localhost:8080/courses | grep -iE '^x-request-id: [0-9a-f]{32}'
       - name: Logs on failure
         if: failure()
         run: docker compose logs
