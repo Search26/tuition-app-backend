@@ -4,6 +4,7 @@ from app.db.base import Base
 from app.models.course import Course, Lesson, LessonStatus
 from app.models.enrollment import Enrollment
 from app.models.media_asset import MediaAsset, MediaAssetStatus
+from app.models.progress import Progress
 from app.models.refresh_token import RefreshToken
 from app.models.user import User
 
@@ -15,6 +16,7 @@ __all__ = [
     "LessonStatus",
     "MediaAsset",
     "MediaAssetStatus",
+    "Progress",
     "RefreshToken",
     "User",
 ]

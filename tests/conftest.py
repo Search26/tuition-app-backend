@@ -61,8 +61,8 @@ async def db(migrated_db: None) -> AsyncIterator[AsyncSession]:
     async with get_sessionmaker()() as session:
         await session.execute(
             text(
-                "TRUNCATE users, refresh_tokens, courses, lessons, enrollments, media_assets "
-                "CASCADE"
+                "TRUNCATE users, refresh_tokens, courses, lessons, enrollments, media_assets, "
+                "progress CASCADE"
             )
         )
         await session.commit()

@@ -52,6 +52,9 @@ class Settings(BaseSettings):
     media_url_ttl_seconds: int = Field(default=4 * 3600, ge=300, le=7 * 24 * 3600)
     media_thumbnail_ttl_seconds: int = Field(default=24 * 3600, ge=3600, le=7 * 24 * 3600)
 
+    # Progress sync: a client clock further ahead than this is clamped to server time.
+    progress_max_clock_skew_seconds: int = Field(default=24 * 3600, ge=60)
+
     # Comma-separated browser origins allowed to call the API and load /media/ (dev web pages).
     cors_origins: str = ""
 

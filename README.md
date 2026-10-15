@@ -145,3 +145,27 @@ the `CORS_ORIGINS` origin:
 ```bash
 python -m http.server 3000 -d scripts   # then open http://localhost:3000/dev-player.html
 ```
+
+## Progress sync
+
+`PUT /me/progress` takes `{"items": [{lesson_id, position_seconds, completed, client_updated_at}]}`,
+1 to 500 items, and answers 200 with one result per item, in order: `applied`, `skipped_stale`
+or `rejected` (with `reason` `LESSON_NOT_FOUND` or `NOT_ENROLLED`), plus the row the server now
+holds. Timestamps must carry an offset (422 otherwise).
+
+The merge is one `INSERT ... ON CONFLICT DO UPDATE`: the position with the newest
+`client_updated_at` wins, and `completed` stays true once any item reported it, so resending a
+batch, or receiving items in any order, ends in the same row. The server decides `completed`
+itself (position ≥ 90% of the lesson's duration) and clamps a client clock more than
+`PROGRESS_MAX_CLOCK_SKEW_SECONDS` (1 day) ahead to server time.
+
+- `GET /me/progress?course_id=` → `{items: [...]}`, my rows for that course in lesson order. 403
+  `NOT_ENROLLED`, 404 `COURSE_NOT_FOUND`.
+- `GET /me/courses` → a page of my enrolled, published courses with `lesson_count`,
+  `completed_count`, `percent_complete`, `enrolled_at` and `last_watched_at`, computed per request.
+
+```bash
+curl -X PUT localhost:8080/me/progress -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"items":[{"lesson_id":"<id>","position_seconds":42.5,"client_updated_at":"2026-10-15T10:00:00+07:00"}]}'
+```
