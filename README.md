@@ -6,7 +6,7 @@ API, PostgreSQL 16, Redis, MinIO and nginx.
 ## Quick start
 
 ```bash
-cp .env.example .env      # dev values; change them before deploying anywhere
+cp .env.example .env      # dev values; for a real server see docs/deploy.md
 make up                   # build and start everything, waits until healthy
 make migrate              # alembic upgrade head
 curl -i localhost:8080/health
@@ -194,3 +194,10 @@ nginx logs JSON to stdout with the media signature replaced by `-`, and limits e
 Over the limit is `429` with `Retry-After: 1` and `{"error":{"code":"RATE_LIMITED",...}}`.
 `/health` is never limited. With `APP_ENV=prod` the API refuses to start while any secret still
 contains `change-me`, `MEDIA_BASE_URL` isn't `https://`, or `CORS_ORIGINS` lists localhost.
+
+## Deploying
+
+[docs/deploy.md](docs/deploy.md) takes one VPS from nothing to HTTPS: `compose.prod.yml` (Caddy with
+Let's Encrypt in front of the same nginx, API, worker, Postgres, Redis and MinIO),
+`scripts/gen-prod-env.sh` for secrets, nightly `scripts/backup.sh`, `scripts/restore.sh` for drills,
+and `make smoke URL=https://...` to check a live server end to end.

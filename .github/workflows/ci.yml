@@ -140,3 +140,107 @@ jobs:
       - name: Logs on failure
         if: failure()
         run: docker compose logs
+
+  prod-stack:
+    # The production compose file end to end on a clean machine: Caddy (its local CA for
+    # "localhost"), only 80/443 public, the deploy smoke test, and a real backup + restore.
+    runs-on: ubuntu-latest
+    env:
+      PROD: docker compose --env-file .env.prod -f compose.prod.yml
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync --frozen
+      - name: Generate .env.prod for localhost
+        run: |
+          scripts/gen-prod-env.sh localhost
+          sed -i "s#^BACKUP_DIR=.*#BACKUP_DIR=$RUNNER_TEMP/backups#" .env.prod
+          ! grep -i change-me .env.prod
+      - name: Build and start (make prod-build, make prod-up)
+        run: make prod-build prod-up
+      - name: Only 80 and 443 are public; MinIO on loopback only
+        run: |
+          set -eu
+          docker ps --format '{{.Names}}: {{.Ports}}'
+          published=$(docker ps --format '{{.Ports}}' | tr ',' '\n' | sed 's/^ *//' | grep -- '->' | sort -u)
+          unexpected=$(echo "$published" \
+            | grep -vE '^(0\.0\.0\.0|\[::\]):(80|443)->(80|443)/(tcp|udp)$|^127\.0\.0\.1:9000->9000/tcp$' || true)
+          echo "unexpected: ${unexpected:-none}"
+          test -z "$unexpected"
+          for port in 5432 6379 8000 8080 9001; do ! nc -z -w 2 127.0.0.1 $port; done
+          IP=$(hostname -I | awk '{print $1}')
+          nc -z -w 2 "$IP" 443
+          ! nc -z -w 2 "$IP" 9000
+      - name: Trust Caddy's local CA
+        run: |
+          for i in $(seq 1 20); do
+            $PROD cp caddy:/data/caddy/pki/authorities/local/root.crt caddy-root.crt && break
+            sleep 1
+          done
+          echo "CURL_CA_BUNDLE=$PWD/caddy-root.crt" >> "$GITHUB_ENV"
+          echo "SSL_CERT_FILE=$PWD/caddy-root.crt" >> "$GITHUB_ENV"
+      - name: Seed, then upload and transcode a video as the admin
+        run: |
+          set -eu
+          make prod-seed
+          curl -fsS -X POST https://localhost/auth/register -H 'Content-Type: application/json' \
+            -d '{"email":"ci-admin@example.com","password":"correct-horse-battery","name":"CI"}'
+          make prod-admin EMAIL=ci-admin@example.com
+          $PROD exec -T api ffmpeg -loglevel error -y \
+            -f lavfi -i testsrc=duration=8:size=1280x720:rate=30 -f lavfi -i sine=duration=8 \
+            -c:v libx264 -pix_fmt yuv420p -c:a aac -shortest /tmp/ci.mp4
+          $PROD cp api:/tmp/ci.mp4 ci.mp4
+          LESSON=$($PROD exec -T postgres psql -U tuition -Atc \
+            "select id from lessons order by position, id limit 1")
+          # MINIO_PUBLIC_ENDPOINT is localhost:9000: the loopback port an SSH tunnel would reach.
+          API_URL=https://localhost ADMIN_EMAIL=ci-admin@example.com ADMIN_PASSWORD=correct-horse-battery \
+            uv run python -m scripts.upload_video --lesson-id "$LESSON" ci.mp4
+          for i in $(seq 1 60); do
+            STATUS=$($PROD exec -T postgres psql -U tuition -Atc "select status from lessons where id = '$LESSON'")
+            echo "lesson status: $STATUS"
+            [ "$STATUS" = ready ] && break
+            sleep 3
+          done
+          test "$STATUS" = ready
+      - name: Smoke test (scripts/smoke.sh)
+        run: scripts/smoke.sh https://localhost
+      - name: JSON logs carry the request id end to end
+        run: |
+          set -eu
+          RID=$(curl -fsS -D - -o /dev/null https://localhost/courses | awk -F': ' 'tolower($1)=="x-request-id"{print $2}' | tr -d '\r')
+          echo "request id from Caddy: $RID"
+          $PROD logs nginx | grep -F "\"request_id\":\"$RID\""
+          $PROD logs api | grep -F "\"request_id\": \"$RID\"" | grep -F '"logger": "app.access"'
+          $PROD logs worker | grep -F '"msg": "Transcode ready"'
+      - name: Refuses placeholder secrets
+        run: |
+          set -u
+          if out=$($PROD run --rm -T -e JWT_SECRET=change-me-0123456789abcdef0123456789abcdef api \
+              python -c 'from app.core.config import get_settings; get_settings()' 2>&1); then
+            echo "started with a placeholder secret"; exit 1
+          fi
+          echo "$out" | tail -3
+          echo "$out" | grep -q "JWT_SECRET still has a change-me placeholder"
+          ! echo "$out" | grep -qF "0123456789abcdef"
+      - name: Backup, then restore into a new database and the bucket
+        run: |
+          set -eu
+          rc() { $PROD run --rm -T rclone "$@"; }
+          scripts/backup.sh | tee backup.json
+          grep -q '"status":"ok"' backup.json
+          BUCKET=$(grep '^MINIO_BUCKET=' .env.prod | cut -d= -f2)
+          HLS=$($PROD exec -T postgres psql -U tuition -Atc "select hls_path from lessons where status = 'ready' limit 1")
+          SEG="${HLS%master.m3u8}v0/seg_00000.m4s"
+          BEFORE=$(rc cat "minio:$BUCKET/$SEG" | sha256sum)
+          rc deletefile "minio:$BUCKET/$SEG"
+          test "$(rc lsf "minio:$BUCKET/${SEG%seg_00000.m4s}" | grep -c seg_00000)" = 0
+          DUMP=$(ls -1t "$RUNNER_TEMP"/backups/db/*.dump | head -1)
+          scripts/restore.sh "$DUMP" --bucket-from "$RUNNER_TEMP/backups" --strict
+          AFTER=$(rc cat "minio:$BUCKET/$SEG" | sha256sum)
+          echo "segment sha256 before: $BEFORE"
+          echo "segment sha256 after:  $AFTER"
+          test "$BEFORE" = "$AFTER"
+          ! scripts/restore.sh "$DUMP" --into tuition
+      - name: Logs on failure
+        if: failure()
+        run: $PROD logs
