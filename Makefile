@@ -1,4 +1,4 @@
-.PHONY: up down clean migrate test lint fmt seed logs
+.PHONY: up down clean migrate test lint fmt seed admin logs
 
 COMPOSE := docker compose
 RUN_API := $(COMPOSE) exec -T api
@@ -28,6 +28,10 @@ fmt:
 
 seed:
 	$(RUN_API) python -m scripts.seed
+
+admin:
+	@test -n "$(EMAIL)" || (echo "usage: make admin EMAIL=user@example.com" && exit 1)
+	$(RUN_API) python -m scripts.make_admin $(EMAIL)
 
 logs:
 	$(COMPOSE) logs -f api

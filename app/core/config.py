@@ -1,7 +1,7 @@
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import SecretStr
+from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -21,6 +21,15 @@ class Settings(BaseSettings):
     minio_secure: bool = False
 
     health_check_timeout_seconds: float = 2.0
+
+    jwt_secret: SecretStr = Field(min_length=32)
+    access_token_ttl_seconds: int = Field(default=900, gt=0)
+    refresh_token_ttl_days: int = Field(default=30, gt=0)
+
+    login_ip_limit: int = Field(default=20, gt=0)
+    login_ip_window_seconds: int = Field(default=60, gt=0)
+    login_email_failure_limit: int = Field(default=5, gt=0)
+    login_email_window_seconds: int = Field(default=900, gt=0)
 
 
 @lru_cache

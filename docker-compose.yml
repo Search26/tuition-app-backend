@@ -5,6 +5,9 @@ services:
     build: .
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
     env_file: .env
+    environment:
+      # Only nginx can reach this port, so trust its X-Forwarded-For for the client IP.
+      FORWARDED_ALLOW_IPS: "*"
     volumes:
       - ./app:/srv/app
       - ./alembic:/srv/alembic

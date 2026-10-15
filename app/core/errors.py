@@ -18,11 +18,42 @@ _HTTP_CODES: dict[int, tuple[str, str]] = {
 class AppError(Exception):
     """Base for errors raised on purpose by services. Later sprints subclass it."""
 
-    def __init__(self, code: str, message: str, status_code: int = status.HTTP_400_BAD_REQUEST):
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        status_code: int = status.HTTP_400_BAD_REQUEST,
+        headers: dict[str, str] | None = None,
+    ):
         super().__init__(message)
         self.code = code
         self.message = message
         self.status_code = status_code
+        self.headers = headers
+
+
+class AuthError(AppError):
+    """401 with the `WWW-Authenticate` header clients expect."""
+
+    def __init__(self, code: str, message: str):
+        super().__init__(
+            code, message, status.HTTP_401_UNAUTHORIZED, headers={"WWW-Authenticate": "Bearer"}
+        )
+
+
+class ForbiddenError(AppError):
+    def __init__(self, message: str = "You do not have access to this resource"):
+        super().__init__("FORBIDDEN", message, status.HTTP_403_FORBIDDEN)
+
+
+class RateLimitedError(AppError):
+    def __init__(self, retry_after_seconds: int):
+        super().__init__(
+            "RATE_LIMITED",
+            "Too many attempts, try again later",
+            status.HTTP_429_TOO_MANY_REQUESTS,
+            headers={"Retry-After": str(retry_after_seconds)},
+        )
 
 
 def error_response(
@@ -40,7 +71,7 @@ def error_response(
 
 async def _app_error_handler(_: Request, exc: Exception) -> JSONResponse:
     assert isinstance(exc, AppError)
-    return error_response(exc.status_code, exc.code, exc.message)
+    return error_response(exc.status_code, exc.code, exc.message, headers=exc.headers)
 
 
 async def _http_error_handler(_: Request, exc: Exception) -> JSONResponse:
