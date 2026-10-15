@@ -1,4 +1,4 @@
-.PHONY: up down clean migrate test lint fmt seed admin logs
+.PHONY: up down clean migrate test lint fmt seed admin upload logs
 
 COMPOSE := docker compose
 RUN_API := $(COMPOSE) exec -T api
@@ -32,6 +32,11 @@ seed:
 admin:
 	@test -n "$(EMAIL)" || (echo "usage: make admin EMAIL=user@example.com" && exit 1)
 	$(RUN_API) python -m scripts.make_admin $(EMAIL)
+
+# Runs on the host (not in the api container): the presigned URL points at localhost:9000.
+upload:
+	@test -n "$(LESSON)" -a -n "$(FILE)" || (echo "usage: make upload LESSON=<lesson uuid> FILE=<path>" && exit 1)
+	uv run python -m scripts.upload_video --lesson-id $(LESSON) "$(FILE)"
 
 logs:
 	$(COMPOSE) logs -f api

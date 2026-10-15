@@ -9,9 +9,11 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.clients import storage
 from app.core.errors import ConflictError, NotFoundError
 from app.models import Course, Enrollment, Lesson
 from app.schemas.pagination import PageParams
+from app.services.media_keys import course_prefix
 
 
 def course_not_found() -> NotFoundError:
@@ -106,3 +108,4 @@ async def delete_course(session: AsyncSession, course_id: uuid.UUID) -> None:
         # Someone enrolled between the check and the delete; the FK is RESTRICT.
         await session.rollback()
         raise _has_enrollments() from exc
+    await storage.delete_prefix_best_effort(course_prefix(course_id))

@@ -19,6 +19,11 @@ class Settings(BaseSettings):
     minio_access_key: SecretStr
     minio_secret_key: SecretStr
     minio_secure: bool = False
+    minio_region: str = "us-east-1"
+    minio_bucket: str = "tuition-media"
+    # Host the uploader reaches. Presigned URLs are signed for this host, not minio_endpoint.
+    minio_public_endpoint: str = "localhost:9000"
+    minio_public_secure: bool = False
 
     health_check_timeout_seconds: float = 2.0
 
@@ -30,6 +35,9 @@ class Settings(BaseSettings):
     login_ip_window_seconds: int = Field(default=60, gt=0)
     login_email_failure_limit: int = Field(default=5, gt=0)
     login_email_window_seconds: int = Field(default=900, gt=0)
+
+    upload_max_bytes: int = Field(default=2 * 1024**3, gt=0)
+    upload_url_ttl_seconds: int = Field(default=900, gt=0, le=7 * 24 * 3600)
 
     # Prefix for lesson `hls_url`. Sprint 5 replaces it with signed stream URLs.
     media_base_url: str = "http://localhost:8080/media"

@@ -13,6 +13,10 @@ _test_db_url = os.environ.get("TEST_DATABASE_URL")
 if not _test_db_url:
     pytest.exit("TEST_DATABASE_URL must be set to run tests", returncode=2)
 os.environ["DATABASE_URL"] = _test_db_url
+# A separate bucket for tests, and URLs signed for the host the tests themselves can reach.
+os.environ["MINIO_BUCKET"] = "tuition-media-test"
+os.environ["MINIO_PUBLIC_ENDPOINT"] = os.environ.get("MINIO_ENDPOINT", "minio:9000")
+os.environ["MINIO_PUBLIC_SECURE"] = os.environ.get("MINIO_SECURE", "false")
 
 from alembic import command  # noqa: E402
 from app.clients.redis import get_redis  # noqa: E402
@@ -50,7 +54,10 @@ async def db(migrated_db: None) -> AsyncIterator[AsyncSession]:
     """A session on a clean database, with login rate-limit counters cleared."""
     async with get_sessionmaker()() as session:
         await session.execute(
-            text("TRUNCATE users, refresh_tokens, courses, lessons, enrollments CASCADE")
+            text(
+                "TRUNCATE users, refresh_tokens, courses, lessons, enrollments, media_assets "
+                "CASCADE"
+            )
         )
         await session.commit()
         redis = get_redis()
