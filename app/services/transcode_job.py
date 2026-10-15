@@ -7,6 +7,7 @@ it, so a video people are watching is never overwritten and a crashed attempt le
 
 import asyncio
 import logging
+import re
 import shutil
 import tempfile
 import uuid
@@ -18,7 +19,7 @@ from arq import Retry
 from sqlalchemy import exists, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.clients import storage
+from app.clients import queue, storage
 from app.core.config import get_settings
 from app.db.session import get_sessionmaker
 from app.models import Lesson, LessonStatus, MediaAsset, MediaAssetStatus
@@ -31,6 +32,8 @@ logger = logging.getLogger(__name__)
 
 MAX_TRIES = 2
 _RUNNABLE = (MediaAssetStatus.UPLOADED, MediaAssetStatus.PROCESSING)
+_UUID = r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+_RUN_DIR = re.compile(rf"hls/{_UUID}/{_UUID}/{_UUID}/")
 
 
 @dataclass(frozen=True)
@@ -111,9 +114,8 @@ async def _finish(run: _Run, info: SourceInfo) -> str:
                 )
             )
         )
-        old_prefixes = {prefix_of(lesson.hls_path)} if lesson.hls_path else set()
-        old_prefixes |= {a.output_prefix for a in replaced if a.output_prefix}
-        old_prefixes.discard(run.prefix)
+        live = prefix_of(lesson.hls_path) if lesson.hls_path else None
+        old_prefixes = {a.output_prefix for a in replaced if a.output_prefix} - {live, run.prefix}
         old_originals = [a.original_key for a in replaced]
         for old in replaced:
             await session.delete(old)
@@ -126,10 +128,34 @@ async def _finish(run: _Run, info: SourceInfo) -> str:
         lesson.duration_seconds = round(info.duration_seconds)
         await session.commit()
 
+    if live and live != run.prefix:
+        await _retire(live)
     for prefix in sorted(old_prefixes):
         await storage.delete_prefix_best_effort(prefix)
     await storage.delete_keys_best_effort(old_originals)
     return "ready"
+
+
+async def _retire(prefix: str) -> None:
+    """Delete the replaced video once every signed URL to it has expired, so people watching or
+    downloading it finish. Without the queue it goes now: an orphan is worse than a cut-off."""
+    try:
+        await queue.enqueue_delete_prefix(prefix, get_settings().media_url_ttl_seconds)
+    except Exception:
+        logger.exception("Could not schedule deletion of %s; deleting it now", prefix)
+        await storage.delete_prefix_best_effort(prefix)
+
+
+async def delete_prefix(ctx: dict[str, Any], prefix: str) -> str:
+    """arq job: remove a replaced video's run folder (scheduled by `_retire`)."""
+    if not _RUN_DIR.fullmatch(prefix):
+        logger.error("Refusing to delete %r: not a transcode run folder", prefix)
+        return "refused"
+    async with get_sessionmaker()() as session:
+        if await session.scalar(select(exists().where(Lesson.hls_path.startswith(prefix)))):
+            return "live"  # can't happen with fresh run ids, but never delete a live video
+    await storage.delete_prefix_best_effort(prefix)
+    return "deleted"
 
 
 async def _fail(run: _Run, message: str) -> None:

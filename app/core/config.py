@@ -1,7 +1,7 @@
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import Field, SecretStr
+from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -45,8 +45,25 @@ class Settings(BaseSettings):
     transcode_tmp_dir: str = "/tmp"
     transcode_retry_delay_seconds: int = Field(default=30, ge=0)
 
-    # Prefix for lesson `hls_url`. Sprint 5 replaces it with signed stream URLs.
+    # Public prefix of nginx's /media/ location; signed media URLs start with it.
     media_base_url: str = "http://localhost:8080/media"
+    # Signs /media/ URLs. Must differ from the JWT secret, so a leak of one can't forge the other.
+    media_signing_secret: SecretStr = Field(min_length=32)
+    media_url_ttl_seconds: int = Field(default=4 * 3600, ge=300, le=7 * 24 * 3600)
+    media_thumbnail_ttl_seconds: int = Field(default=24 * 3600, ge=3600, le=7 * 24 * 3600)
+
+    # Comma-separated browser origins allowed to call the API and load /media/ (dev web pages).
+    cors_origins: str = ""
+
+    @property
+    def cors_origin_list(self) -> list[str]:
+        return [o.strip().rstrip("/") for o in self.cors_origins.split(",") if o.strip()]
+
+    @model_validator(mode="after")
+    def _media_secret_is_its_own(self) -> "Settings":
+        if self.media_signing_secret.get_secret_value() == self.jwt_secret.get_secret_value():
+            raise ValueError("MEDIA_SIGNING_SECRET must differ from JWT_SECRET")
+        return self
 
 
 @lru_cache

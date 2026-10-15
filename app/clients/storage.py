@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from datetime import timedelta
 from functools import lru_cache
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from minio import Minio
 from minio.deleteobjects import DeleteObject
@@ -80,6 +81,18 @@ def presign_put(key: str, ttl_seconds: int) -> str:
     return get_signing_minio().presigned_put_object(
         get_settings().minio_bucket, key, expires=timedelta(seconds=ttl_seconds)
     )
+
+
+def presign_get_path(key: str, ttl_seconds: int) -> str:
+    """Path and query of a presigned GET for the internal host, for nginx to proxy to.
+
+    With the region set, signing makes no network call.
+    """
+    url = get_minio().presigned_get_object(
+        get_settings().minio_bucket, key, expires=timedelta(seconds=ttl_seconds)
+    )
+    parts = urlsplit(url)
+    return f"{parts.path}?{parts.query}"
 
 
 def _stat(bucket: str, key: str) -> StoredObject | None:

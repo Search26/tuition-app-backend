@@ -10,6 +10,7 @@ _REQUIRED_ENV = {
     "MINIO_ACCESS_KEY": "access",
     "MINIO_SECRET_KEY": "super-secret-value",
     "JWT_SECRET": "jwt-secret-value-that-is-at-least-32-chars",
+    "MEDIA_SIGNING_SECRET": "media-secret-value-that-is-at-least-32-chars",
 }
 
 
@@ -44,3 +45,29 @@ def test_short_jwt_secret_is_rejected(env: pytest.MonkeyPatch) -> None:
         Settings(_env_file=None)  # type: ignore[call-arg]
 
     assert "jwt_secret" in str(exc_info.value)
+
+
+def test_short_media_signing_secret_is_rejected(env: pytest.MonkeyPatch) -> None:
+    env.setenv("MEDIA_SIGNING_SECRET", "too-short")
+
+    with pytest.raises(ValidationError) as exc_info:
+        Settings(_env_file=None)  # type: ignore[call-arg]
+
+    assert "media_signing_secret" in str(exc_info.value)
+
+
+def test_media_signing_secret_must_differ_from_the_jwt_secret(env: pytest.MonkeyPatch) -> None:
+    env.setenv("MEDIA_SIGNING_SECRET", _REQUIRED_ENV["JWT_SECRET"])
+
+    with pytest.raises(ValidationError) as exc_info:
+        Settings(_env_file=None)  # type: ignore[call-arg]
+
+    assert "MEDIA_SIGNING_SECRET must differ from JWT_SECRET" in str(exc_info.value)
+
+
+def test_cors_origins_are_split_and_trimmed(env: pytest.MonkeyPatch) -> None:
+    env.setenv("CORS_ORIGINS", " http://localhost:3000/ , https://dev.example.com,")
+
+    settings = Settings(_env_file=None)  # type: ignore[call-arg]
+
+    assert settings.cors_origin_list == ["http://localhost:3000", "https://dev.example.com"]
