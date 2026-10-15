@@ -46,6 +46,16 @@ class ForbiddenError(AppError):
         super().__init__("FORBIDDEN", message, status.HTTP_403_FORBIDDEN)
 
 
+class NotFoundError(AppError):
+    def __init__(self, code: str, message: str):
+        super().__init__(code, message, status.HTTP_404_NOT_FOUND)
+
+
+class ConflictError(AppError):
+    def __init__(self, code: str, message: str):
+        super().__init__(code, message, status.HTTP_409_CONFLICT)
+
+
 class RateLimitedError(AppError):
     def __init__(self, retry_after_seconds: int):
         super().__init__(

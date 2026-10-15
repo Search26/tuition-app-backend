@@ -49,7 +49,9 @@ async def migrated_db() -> None:
 async def db(migrated_db: None) -> AsyncIterator[AsyncSession]:
     """A session on a clean database, with login rate-limit counters cleared."""
     async with get_sessionmaker()() as session:
-        await session.execute(text("TRUNCATE users, refresh_tokens CASCADE"))
+        await session.execute(
+            text("TRUNCATE users, refresh_tokens, courses, lessons, enrollments CASCADE")
+        )
         await session.commit()
         redis = get_redis()
         async for key in redis.scan_iter("ratelimit:login:*"):

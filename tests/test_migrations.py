@@ -2,6 +2,8 @@ import asyncio
 import os
 
 from alembic.config import Config
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import create_async_engine
 
 from alembic import command
 
@@ -19,3 +21,30 @@ async def test_upgrade_downgrade_upgrade_round_trip() -> None:
     await asyncio.to_thread(command.upgrade, config, "head")
     await asyncio.to_thread(command.downgrade, config, "base")
     await asyncio.to_thread(command.upgrade, config, "head")
+
+
+async def test_courses_migration_downgrade_removes_everything() -> None:
+    config = _alembic_config()
+    await asyncio.to_thread(command.upgrade, config, "head")
+    await asyncio.to_thread(command.downgrade, config, "0002")
+
+    engine = create_async_engine(os.environ["TEST_DATABASE_URL"])
+    try:
+        async with engine.connect() as conn:
+            tables = await conn.scalar(
+                text(
+                    "SELECT count(*) FROM pg_tables "
+                    "WHERE tablename IN ('courses', 'lessons', 'enrollments')"
+                )
+            )
+            extensions = await conn.scalar(
+                text("SELECT count(*) FROM pg_extension WHERE extname IN ('unaccent', 'pg_trgm')")
+            )
+            enum_type = await conn.scalar(
+                text("SELECT count(*) FROM pg_type WHERE typname = 'lesson_status'")
+            )
+    finally:
+        await engine.dispose()
+        await asyncio.to_thread(command.upgrade, config, "head")
+
+    assert (tables, extensions, enum_type) == (0, 0, 0)

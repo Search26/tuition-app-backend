@@ -25,7 +25,7 @@ which takes a few minutes. Later runs use the cached image.
 | `make migrate` | Run Alembic migrations |
 | `make test` | Run pytest against the `tuition_test` database |
 | `make lint` / `make fmt` | ruff check and format |
-| `make seed` | Load dev data (from Sprint 2) |
+| `make seed` | Load 2 sample courses with 9 lessons (safe to re-run) |
 | `make admin EMAIL=...` | Make a registered user an admin |
 | `make logs` | Follow API logs |
 
@@ -55,3 +55,15 @@ Validation errors (422, `VALIDATION_ERROR`) add a `details` list of `{field, mes
 
 Access tokens last 15 minutes, refresh tokens 30 days. Protected routes depend on
 `get_current_user` or `require_admin` from `app/api/deps.py`.
+
+## Courses
+
+- `GET /courses?page=1&page_size=20&q=` published courses, newest first; `q` ignores case and
+  accents, so `lap trinh` finds "Lập trình"
+- `GET /courses/{id}` a published course with its lessons in order; `hls_url` is set only when a
+  lesson is `ready`
+- `POST /courses/{id}/enroll` (logged in) → 201 the first time, 200 after that
+
+Admin routes live under `/admin` and all require `require_admin`: course CRUD at
+`/admin/courses`, lesson create at `/admin/courses/{id}/lessons`, lesson update and delete at
+`/admin/lessons/{id}`. A course with enrollments can't be deleted; unpublish it instead.
