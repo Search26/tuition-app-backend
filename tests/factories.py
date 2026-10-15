@@ -56,6 +56,7 @@ async def make_lesson(
     status: LessonStatus = LessonStatus.DRAFT,
     hls_path: str | None = None,
     thumbnail_path: str | None = None,
+    duration_seconds: int | None = None,
 ) -> Lesson:
     lesson = Lesson(
         course_id=course.id,
@@ -64,6 +65,7 @@ async def make_lesson(
         status=status,
         hls_path=hls_path,
         thumbnail_path=thumbnail_path,
+        duration_seconds=duration_seconds,
     )
     db.add(lesson)
     await db.commit()
