@@ -18,19 +18,29 @@ class LessonPublic(BaseModel):
     duration_seconds: int | None
     status: LessonStatus
     hls_path: str | None = Field(exclude=True)
+    thumbnail_path: str | None = Field(exclude=True)
+
+    def _media_url(self, key: str | None) -> str | None:
+        if self.status != LessonStatus.READY or not key:
+            return None
+        return f"{get_settings().media_base_url.rstrip('/')}/{key.lstrip('/')}"
 
     @computed_field  # type: ignore[prop-decorator]
     @property
     def hls_url(self) -> str | None:
-        if self.status != LessonStatus.READY or not self.hls_path:
-            return None
-        return f"{get_settings().media_base_url.rstrip('/')}/{self.hls_path.lstrip('/')}"
+        return self._media_url(self.hls_path)
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def thumbnail_url(self) -> str | None:
+        return self._media_url(self.thumbnail_path)
 
 
 class AdminLesson(LessonPublic):
     course_id: uuid.UUID
-    # Admins see the raw storage key; the public schema hides it.
+    # Admins see the raw storage keys; the public schema hides them.
     hls_path: str | None
+    thumbnail_path: str | None
     created_at: datetime
     updated_at: datetime
 

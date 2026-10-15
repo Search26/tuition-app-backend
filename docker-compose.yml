@@ -20,6 +20,20 @@ services:
       minio:
         condition: service_healthy
 
+  worker:
+    build: .
+    command: arq app.worker.WorkerSettings
+    env_file: .env
+    volumes:
+      - ./app:/srv/app
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+
   nginx:
     image: nginx:1.27-alpine
     ports:

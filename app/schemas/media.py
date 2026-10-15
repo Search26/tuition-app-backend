@@ -45,5 +45,6 @@ class MediaAssetOut(BaseModel):
     content_type: str
     size_bytes: int | None
     error_msg: str | None
+    attempts: int
     created_at: datetime
     updated_at: datetime

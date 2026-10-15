@@ -19,6 +19,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync --frozen
       - run: cp .env.example .env
       - name: make up
         run: make up
@@ -33,6 +35,31 @@ jobs:
         run: docker compose exec -T api pytest -v
       - name: Health through nginx
         run: curl -fsS -i http://localhost:8080/health
+      - name: Upload a video and transcode it through the worker
+        run: |
+          set -eu
+          docker compose exec -T api python -m scripts.seed
+          curl -fsS -X POST http://localhost:8080/auth/register -H 'Content-Type: application/json' \
+            -d '{"email":"ci-admin@example.com","password":"correct-horse-battery","name":"CI"}'
+          docker compose exec -T api python -m scripts.make_admin ci-admin@example.com
+          docker compose exec -T api ffmpeg -loglevel error -y \
+            -f lavfi -i testsrc=duration=8:size=1280x720:rate=30 -f lavfi -i sine=duration=8 \
+            -c:v libx264 -pix_fmt yuv420p -c:a aac -shortest /tmp/ci.mp4
+          docker compose cp api:/tmp/ci.mp4 ci.mp4
+          LESSON=$(docker compose exec -T postgres psql -U tuition -Atc \
+            "select id from lessons order by position, id limit 1")
+          ADMIN_EMAIL=ci-admin@example.com ADMIN_PASSWORD=correct-horse-battery \
+            uv run python -m scripts.upload_video --lesson-id "$LESSON" ci.mp4
+          for i in $(seq 1 60); do
+            STATUS=$(docker compose exec -T postgres psql -U tuition -Atc \
+              "select status from lessons where id = '$LESSON'")
+            echo "lesson status: $STATUS"
+            [ "$STATUS" = ready ] && break
+            sleep 3
+          done
+          test "$STATUS" = ready
+          docker compose exec -T postgres psql -U tuition -c \
+            "select status, duration_seconds, hls_path from lessons where id = '$LESSON'"
       - name: Spoofed X-Forwarded-For can't dodge the login IP limit
         run: |
           # LOGIN_IP_LIMIT is 20 in .env.example, so the 21st attempt must be 429.

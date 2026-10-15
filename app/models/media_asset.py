@@ -9,6 +9,7 @@ from sqlalchemy import (
     Enum,
     ForeignKey,
     Index,
+    Integer,
     String,
     Text,
     func,
@@ -54,6 +55,9 @@ class MediaAsset(Base):
         default=MediaAssetStatus.PENDING,
     )
     error_msg: Mapped[str | None] = mapped_column(Text)
+    # hls/{course_id}/{lesson_id}/{run_id}/ of the current or last transcode attempt.
+    output_prefix: Mapped[str | None] = mapped_column(Text)
+    attempts: Mapped[int] = mapped_column(Integer, server_default="0", default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()

@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from app.api.router import api_router
+from app.clients.queue import close_queue
 from app.clients.redis import get_redis
 from app.core.config import get_settings
 from app.core.errors import register_exception_handlers
@@ -17,6 +18,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     yield
     await get_engine().dispose()
     await get_redis().aclose()
+    await close_queue()
 
 
 def create_app() -> FastAPI:

@@ -79,6 +79,7 @@ class Lesson(Base):
     )
     # Storage key of master.m3u8, written by the transcode worker in Sprint 4.
     hls_path: Mapped[str | None] = mapped_column(Text)
+    thumbnail_path: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
